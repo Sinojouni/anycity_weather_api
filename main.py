@@ -4,6 +4,8 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 from sklearn.preprocessing import MinMaxScaler
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
@@ -15,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 apikey = os.getenv("API_KEY")
 
+tf.config.set_visible_devices([], "GPU")
 
 app = FastAPI()
 
