@@ -9,7 +9,7 @@ os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import EarlyStopping,ModelCheckpoint
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -142,6 +142,34 @@ def geocode_city(city):
             raise ValueError("Invalid city name!")
     else:
         raise ConnectionError("Failed to fetch geocoding data.")
+    
+
+def train(scaled_data,modelpath):
+    seq_length = 24
+    X, y = create_sequences(scaled_data, seq_length)
+
+    train_size = int(len(X) * 0.7)
+    valid_size = int(len(X) * 0.15)
+    X_train, X_valid, X_test = X[:train_size], X[train_size:train_size+valid_size], X[train_size+valid_size:]
+    y_train, y_valid, y_test = y[:train_size], y[train_size:train_size+valid_size], y[train_size+valid_size:]
+
+    model = Sequential([
+            LSTM(64, return_sequences=True, input_shape=(seq_length, X.shape[2])),
+            Dropout(0.2),
+            LSTM(64, return_sequences=True),
+            Dropout(0.2),
+            LSTM(64, return_sequences=False),
+            Dropout(0.2),
+            Dense(32, activation='relu'),
+            Dense(6),
+    ])
+
+    model.compile(optimizer='adam', loss='mse')
+    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    checkpoint = ModelCheckpoint(modelpath, monitor='val_loss', save_best_only=True)
+
+    model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_valid, y_valid), callbacks=[early_stop,checkpoint])
+    return
 
 @app.get("/predict/{city}/{years}")
 def predict_weather(city: str, years: int):
@@ -151,33 +179,12 @@ def predict_weather(city: str, years: int):
             
         scaler, scaled_data = preprocess_data(all_data)
 
-        seq_length = 24
-        X, y = create_sequences(scaled_data, seq_length)
+        modelpath=str(years)+city+".keras"
 
-        train_size = int(len(X) * 0.7)
-        valid_size = int(len(X) * 0.15)
-        X_train, X_valid, X_test = X[:train_size], X[train_size:train_size+valid_size], X[train_size+valid_size:]
-        y_train, y_valid, y_test = y[:train_size], y[train_size:train_size+valid_size], y[train_size+valid_size:]
+        train(scaled_data=scaled_data,modelpath=modelpath)
 
-        print("Training model...")
+        model = tf.keras.models.load_model(modelpath)
 
-        model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(seq_length, X.shape[2])),
-            Dropout(0.2),
-            LSTM(64, return_sequences=True),
-            Dropout(0.2),
-            LSTM(64, return_sequences=False),
-            Dropout(0.2),
-            Dense(32, activation='relu'),
-            Dense(6),
-        ])
-
-        model.compile(optimizer='adam', loss='mse')
-        early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-
-        model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_valid, y_valid), callbacks=[early_stop])
-
-        print("Model training complete!")
 
         weather_data = fetch_last_24_hours_weather(city)
         X_input = np.array([[d["temp"], d["pressure"], d["humidity"], d["clouds"], d["wind_speed"], d["wind_deg"]] for d in weather_data["data"]])
@@ -198,7 +205,12 @@ def predict_weather(city: str, years: int):
             } for i in range(len(today_pred_inv))
         ]
 
+
+        if os.path.exists(modelpath):
+            os.remove(modelpath)
+
         return {"status": "success", "predictions": predictions}
+
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
