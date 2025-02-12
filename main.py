@@ -1,21 +1,15 @@
+
 import requests
-import numpy as np
-import pandas as pd
 import os
 from datetime import datetime, timedelta
-from sklearn.preprocessing import MinMaxScaler
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import EarlyStopping,ModelCheckpoint
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+
 load_dotenv()
 apikey = os.getenv("API_KEY")
+
 
 app = FastAPI()
 
@@ -103,31 +97,6 @@ def fetch_weather_data(years, latitude, longitude):
         print(f"Error fetching weather data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching weather data: {str(e)}")
 
-def preprocess_data(data):
-    try:
-        df = pd.DataFrame(data, columns=["dt", "temp", "pressure", "humidity", "clouds", "wind_speed", "wind_deg"])
-        df["dt"] = pd.to_datetime(df["dt"])
-        df.set_index("dt", inplace=True)
-
-        features = ["temp", "pressure", "humidity", "clouds", "wind_speed", "wind_deg"]
-        raw_data = df[features].values
-
-        scaler = MinMaxScaler()
-        scaled_data = scaler.fit_transform(raw_data)
-
-        return scaler, scaled_data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error preprocessing data: {str(e)}")
-
-def create_sequences(data, seq_length=24):
-    try:
-        X, y = [], []
-        for i in range(len(data) - seq_length):
-            X.append(data[i:i + seq_length])
-            y.append(data[i + seq_length])
-        return np.array(X), np.array(y)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating sequences: {str(e)}")
     
 def geocode_city(city):
     geocode_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1"
@@ -142,78 +111,30 @@ def geocode_city(city):
             raise ValueError("Invalid city name!")
     else:
         raise ConnectionError("Failed to fetch geocoding data.")
-    
 
-def train(scaled_data,modelpath):
-    seq_length = 24
-    X, y = create_sequences(scaled_data, seq_length)
-
-    train_size = int(len(X) * 0.7)
-    valid_size = int(len(X) * 0.15)
-    X_train, X_valid, X_test = X[:train_size], X[train_size:train_size+valid_size], X[train_size+valid_size:]
-    y_train, y_valid, y_test = y[:train_size], y[train_size:train_size+valid_size], y[train_size+valid_size:]
-
-    model = Sequential([
-            LSTM(64, return_sequences=True, input_shape=(seq_length, X.shape[2])),
-            Dropout(0.2),
-            LSTM(64, return_sequences=True),
-            Dropout(0.2),
-            LSTM(64, return_sequences=False),
-            Dropout(0.2),
-            Dense(32, activation='relu'),
-            Dense(6),
-    ])
-
-    model.compile(optimizer='adam', loss='mse')
-    early_stop = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
-    checkpoint = ModelCheckpoint(modelpath, monitor='val_loss', save_best_only=True)
-
-    model.fit(X_train, y_train, epochs=20, batch_size=32, validation_data=(X_valid, y_valid), callbacks=[early_stop,checkpoint])
-    return
-
-@app.get("/predict/{city}/{years}")
+@app.get("/get_data/{city}/{years}")
 def predict_weather(city: str, years: int):
     try:
         latitude, longitude = geocode_city(city=city)
         all_data = list(fetch_weather_data(years, latitude, longitude))
-            
-        scaler, scaled_data = preprocess_data(all_data)
 
-        modelpath=str(years)+city+".keras"
-
-        train(scaled_data=scaled_data,modelpath=modelpath)
-
-        model = tf.keras.models.load_model(modelpath)
-
-
-        weather_data = fetch_last_24_hours_weather(city)
-        X_input = np.array([[d["temp"], d["pressure"], d["humidity"], d["clouds"], d["wind_speed"], d["wind_deg"]] for d in weather_data["data"]])
-        X_input = scaler.transform(X_input).reshape(1, 24, 6)
-
-        for i in range(24):
-            today_pred = model.predict(X_input)
-            X_input = X_input[:, 1:, :]
-            today_pred = today_pred.reshape(1, 1, 6)
-            X_input = np.append(X_input, today_pred, axis=1) 
-    
-        today_pred_inv = scaler.inverse_transform(X_input[0])
-
-        predictions = [
-            {
-                "hour": i,
-                "temperature": round(today_pred_inv[i][0])
-            } for i in range(len(today_pred_inv))
-        ]
-
-
-        if os.path.exists(modelpath):
-            os.remove(modelpath)
-
-        return {"status": "success", "predictions": predictions}
-
+        return {"status": "success", "predictions": all_data}
 
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+    
 
+
+@app.get("/yesterday_data/{city}")
+def predict_weather(city: str):
+    try:
+            
+        weather_data = fetch_last_24_hours_weather(city)
+
+        return {"status": "success", "predictions": weather_data}
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
