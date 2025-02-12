@@ -17,8 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 apikey = os.getenv("API_KEY")
 
-tf.config.set_visible_devices([], "GPU")
-
 app = FastAPI()
 
 app.add_middleware(
